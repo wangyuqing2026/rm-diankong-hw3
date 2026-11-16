@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>流水灯数据包生成 / 校验工具</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: "Microsoft YaHei", system-ui, sans-serif; max-width: 760px; margin: 32px auto; padding: 0 16px; line-height: 1.7; }
+  h1 { font-size: 20px; }
+  h2 { font-size: 16px; margin-top: 28px; border-left: 4px solid #3b82f6; padding-left: 8px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+  label { min-width: 76px; }
+  select, input { padding: 5px 8px; font-size: 14px; border: 1px solid #9ca3af; border-radius: 6px; background: transparent; }
+  input[type=number] { width: 100px; }
+  input[type=text] { width: 100%; font-family: Consolas, monospace; font-size: 15px; letter-spacing: 1px; }
+  button { padding: 6px 14px; font-size: 14px; border: 1px solid #3b82f6; border-radius: 6px; background: #3b82f6; color: #fff; cursor: pointer; }
+  button.ghost { background: transparent; color: #3b82f6; }
+  .out { font-family: Consolas, monospace; font-size: 22px; font-weight: 700; letter-spacing: 2px; padding: 10px 12px; border-radius: 8px; background: #1f2937; color: #4ade80; }
+  .err { color: #dc2626; font-weight: 700; }
+  .ok { color: #16a34a; font-weight: 700; }
+  code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-family: Consolas, monospace; }
+  .hint { font-size: 13px; color: #6b7280; }
+  table { border-collapse: collapse; font-size: 14px; }
+  td, th { border: 1px solid #d1d5db; padding: 4px 10px; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>流水灯数据包生成 / 校验工具</h1>
+<p class="hint">数据包格式：<code>AA  RUN  DIR  STEP_L  STEP_H  CHECK</code>；
+CHECK = (AA+RUN+DIR+STEP_L+STEP_H) % 256。发送时串口助手要选 <b>HEX 模式</b>，不加换行。</p>
+
+<h2>一、按状态生成数据包</h2>
+<div class="row">
+  <label>运行状态</label>
+  <select id="run"><option value="1">运行 RUN=01</option><option value="0">暂停 RUN=00</option></select>
+  <label>方向</label>
+  <select id="dir"><option value="0">正向 DIR=00</option><option value="1">反向 DIR=01</option></select>
+  <label>间隔</label>
+  <input type="number" id="step" value="300" min="100" max="2000" step="10"> ms
+</div>
+<div class="row">
+  <button onclick="gen()">生成</button>
+  <button class="ghost" onclick="preset(1,0,300)">运行/正向/300</button>
+  <button class="ghost" onclick="preset(0,0,300)">暂停/正向/300</button>
+  <button class="ghost" onclick="preset(1,1,300)">运行/反向/300</button>
+  <button class="ghost" onclick="preset(0,1,1000)">暂停/反向/1000</button>
+</div>
+<div class="out" id="pkt">AA 01 00 2C 01 D8</div>
+<div id="calc" class="hint"></div>
+
+<h2>二、粘贴 6 字节，反查/校验</h2>
+<div class="row">
+  <input type="text" id="decode" placeholder="例如：AA 01 00 2C 01 D8" oninput="dec()">
+</div>
+<div id="decResult"></div>
+
+<h2>三、常用间隔速查</h2>
+<table id="tbl"></table>
+<p class="hint">表里是"运行/正向"的完整包；改成暂停把第 2 字节 01 换 00、CHECK 减 1；改成反向把第 3 字节换 01、CHECK 加 1。</p>
+
+<script>
+const hex = (n) => n.toString(16).toUpperCase().padStart(2, '0');
+
+function build(run, dir, step) {
+  const lo = step & 0xFF, hi = (step >> 8) & 0xFF;
+  const sum = (0xAA + run + dir + lo + hi) & 0xFF;
+  return { bytes: [0xAA, run, dir, lo, hi, sum], sum, lo, hi };
+}
+
+function gen() {
+  const run = +document.getElementById('run').value;
+  const dir = +document.getElementById('dir').value;
+  const step = +document.getElementById('step').value;
+  const box = document.getElementById('pkt');
+  const calc = document.getElementById('calc');
+
+  if (!Number.isFinite(step) || step < 100 || step > 2000) {
+    box.textContent = '间隔必须是 100 ~ 2000 ms';
+    box.style.color = '#f87171';
+    calc.textContent = '';
+    return;
+  }
+  box.style.color = '#4ade80';
+
+  const { bytes, sum, lo, hi } = build(run, dir, step);
+  box.textContent = bytes.map(hex).join(' ');
+  calc.innerHTML = `${step} ms = 0x${((hi << 8) | lo).toString(16).toUpperCase().padStart(4, '0')}`
+    + `，所以 STEP_L=0x${hex(lo)}、STEP_H=0x${hex(hi)}；<br>`
+    + `AA + ${hex(run)} + ${hex(dir)} + ${hex(lo)} + ${hex(hi)} = 0x${(0xAA + run + dir + lo + hi).toString(16).toUpperCase()}，取低 8 位 CHECK = 0x${hex(sum)}`;
+}
+
+function preset(run, dir, step) {
+  document.getElementById('run').value = run;
+  document.getElementById('dir').value = dir;
+  document.getElementById('step').value = step;
+  gen();
+}
+
+function dec() {
+  const raw = document.getElementById('decode').value.trim();
+  const out = document.getElementById('decResult');
+  if (!raw) { out.innerHTML = ''; return; }
+
+  const parts = raw.replace(/0x/gi, '').split(/[\s,]+/).filter(Boolean);
+  const bad = parts.filter(p => !/^[0-9a-fA-F]{1,2}$/.test(p));
+  if (bad.length) {
+    out.innerHTML = `<span class="err">有非十六进制内容：${bad.join(' ')}</span>`;
+    return;
+  }
+  const b = parts.map(p => parseInt(p, 16));
+  if (b.length !== 6) {
+    out.innerHTML = `<span class="err">需要正好 6 个字节，现在 ${b.length} 个</span>`;
+    return;
+  }
+  if (b[0] !== 0xAA) { out.innerHTML = `<span class="err">帧头不是 AA</span>`; return; }
+  const sum = (b[0] + b[1] + b[2] + b[3] + b[4]) & 0xFF;
+  if (sum !== b[5]) {
+    out.innerHTML = `<span class="err">校验和不符：应为 0x${hex(sum)}，实际 0x${hex(b[5])}，单片机会丢弃这一包</span>`;
+    return;
+  }
+  const step = b[3] | (b[4] << 8);
+  const warn = (b[1] > 1 || b[2] > 1 || step < 100 || step > 2000)
+    ? '<br><span class="err">注意：RUN/DIR 只能是 0/1，间隔必须 100~2000，否则单片机会丢弃</span>' : '';
+  out.innerHTML = `<span class="ok">校验通过</span><br>`
+    + `运行状态：${b[1] === 1 ? '运行' : '暂停'}（${hex(b[1])}）　`
+    + `方向：${b[2] === 1 ? '反向' : '正向'}（${hex(b[2])}）　`
+    + `间隔：${step} ms（0x${step.toString(16).toUpperCase().padStart(4, '0')}）` + warn;
+}
+
+(function table() {
+  const steps = [100, 200, 300, 500, 800, 1000, 1500, 2000];
+  let html = '<tr><th>间隔</th><th>STEP_L STEP_H</th><th>运行/正向 完整包</th><th>暂停/反向 完整包</th></tr>';
+  for (const s of steps) {
+    const a = build(1, 0, s), b = build(0, 1, s);
+    html += `<tr><td>${s} ms</td><td>${hex(a.lo)} ${hex(a.hi)}</td>`
+      + `<td>${a.bytes.map(hex).join(' ')}</td><td>${b.bytes.map(hex).join(' ')}</td></tr>`;
+  }
+  document.getElementById('tbl').innerHTML = html;
+})();
+
+gen();
+</script>
+</body>
+</html>

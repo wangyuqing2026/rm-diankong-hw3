@@ -1,0 +1,22 @@
+# 编译产物
+build/
+*.elf
+*.hex
+*.bin
+*.map
+
+# CLion / IDE
+.idea/
+cmake-build-*/
+
+# 仿真程序
+sim/*.exe
+
+# 参考用的原始资料与下载缓存（不需要进仓库）
+vendor/
+materials/
+工具/__pycache__/
+
+# 系统
+.DS_Store
+Thumbs.db
