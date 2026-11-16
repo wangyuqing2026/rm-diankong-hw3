@@ -20,3 +20,7 @@ materials/
 # 系统
 .DS_Store
 Thumbs.db
+
+# 第三方工具与自动生成的预览
+工具/串口助手/
+工具/代码预览.html
