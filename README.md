@@ -11,9 +11,9 @@
 | 流水灯 | ≥3 颗 LED，同一时刻只亮一颗 | 已完成，3 颗 LED（PA0~PA2） |
 | 按键 | 一个切方向、一个切暂停/继续，需消抖 | 已完成，PA11 / PA12 外部中断 + 20 ms 消抖 |
 | 串口数据包 | `AA RUN DIR STEP_L STEP_H CHECK`，6 字节 | 已完成，中断收字节 + 主循环拆包校验 |
-| OLED | 软件 I²C，显示状态/方向/间隔/LED 编号 | 已完成，四行实时刷新 |
+| OLED | 软件 I²C，显示状态/方向/间隔/LED 编号 | 已完成，四行实时刷新；**改用硬件 I²C**（选做） |
 | 串口反馈 | 校验通过后回传状态，按键变化也回传 | 已完成，`HAL_UART_Transmit_DMA()`（选做） |
-| 选做 | DMA 发送 / 硬件 I²C | **已完成 DMA 发送**（DMA1_Channel4 → USART1_TX）；硬件 I²C 未做 |
+| 选做 | DMA 发送 / 硬件 I²C | **两项都已完成**：DMA 发送（DMA1_Channel4 → USART1_TX）+ 硬件 I²C（I2C1，PB6/PB7，400 kHz） |
 
 ## 二、硬件与接线
 
@@ -24,8 +24,8 @@
 | KEY2（暂停/继续）| PA12 | 按键一脚 | 同上 |
 | USART1_TX | PA9 | USB 转 TTL 的 RX | 3.3 V 电平 |
 | USART1_RX | PA10 | USB 转 TTL 的 TX | 必须与电脑共地 |
-| OLED SCL | PB1 | OLED SCL | 软件 I²C，驱动内部配置为开漏输出 |
-| OLED SDA | PB0 | OLED SDA | 同上 |
+| OLED SCL | PB6 | OLED SCL | 硬件 I²C1，复用开漏（选做；PB1 是软件 I²C 版本用的） |
+| OLED SDA | PB7 | OLED SDA | 同上（PB0 是软件 I²C 版本用的） |
 | 供电 | 3.3V / GND | OLED VCC / GND | 不要接 5 V |
 
 串口参数：**115200、8 位数据、无校验、1 位停止位（8N1）**。
@@ -105,7 +105,7 @@ main()
    HAL 遇到溢出错误（ORE）会自行停止接收并把接收中断关掉，只写接收完成回调的话，
    串口会出现"收几次就再也不理你"。现在出错后清标志并重新开接收，链路不会卡死。
 5. **OLED 刷新**：缓存四行文本，`strcmp` 比较后才调 `OLED_ShowString`，并把不足 16 列补空格，
-   既避免闪烁也避免每次切灯都整屏重画（软件 I²C 刷屏约几毫秒）。
+   既避免闪烁也避免每次切灯都整屏重画（硬件 I²C 400 kHz，重画一行 32 字节约 2.6 ms）。
 
 ## 六、编译与下载
 
@@ -173,13 +173,38 @@ main()
 **中断发送 vs DMA 发送**：一包 34 字节，中断方式 CPU 要进 34 次中断；DMA 方式 CPU 只进 1 次。
 波特率越高、包越长，差距越明显。
 
-### 8.2 未做：硬件 I²C
+### 8.2 已完成：硬件 I²C
 
-留档：OLED 改用 I2C1（PB6/PB7，**400 kHz**），`OLED_WriteCommand/WriteData` 换成
-`HAL_I2C_Master_Transmit(&hi2c1, 0x78, buf, 2, 100)`。没做的原因是时间放在基础稳定性上
-（串口溢出自恢复、按键接触、面包板同排短路这三个坑）。
+OLED 不再由 GPIO 逐位翻转，改由 I2C1 外设产生时序：**PB6 = SCL、PB7 = SDA**，两脚复用开漏，
+速率 **400 kHz**。
 
-> 注意 100 kHz 不够：整屏 1024 字节 ≈ 92 ms 阻塞，按键会明显变迟钝；400 kHz 才能压到约 23 ms。
+改动共三处：
+
+| 文件 | 改了什么 |
+| --- | --- |
+| `Core/Src/i2c.c`（新增） | `MX_I2C1_Init()`：400 kHz、7 位地址、关双地址与通用呼叫；`HAL_I2C_MspInit()` 里把 PB6/PB7 配成 `GPIO_MODE_AF_OD` |
+| `Core/Src/OLED.c` | 删掉 `OLED_I2C_Start/Stop/SendByte` 三个位翻转函数；`OLED_WriteCommand/WriteData` 改成一条 `HAL_I2C_Master_Transmit(&hi2c1, 0x78, buf, 2, 100)`，`buf = {控制字, 数据}` |
+| `CMakeLists.txt` | 源文件列表加 `Core/Src/i2c.c` |
+
+**地址为什么是 0x78**：SSD1306 的 7 位地址是 0x3C，HAL 要的是左移一位后的 8 位地址 → `0x3C << 1 = 0x78`。
+**控制字**：`0x00` 表示后面是命令，`0x40` 表示后面是显存数据——这正是原来位翻转版本里
+`OLED_I2C_SendByte(0x00/0x40)` 那两个字节。
+
+**为什么是 400 kHz 不是 100 kHz**：本工程每个字节是一条 I²C 事务（起始 + 地址 + 控制字 + 数据 + 停止，
+约 30 bit）。100 kHz 下一条约 300 µs，整屏 1024 字节要 ≈ 300 ms，主循环会被彻底卡住；
+400 kHz 下一条约 75 µs，整屏 ≈ 77 ms。本工程只在内容变化时重画对应行（一行 32 字节约 2.6 ms），
+所以实际使用时几乎感觉不到。
+
+**验证方式**（不用示波器）：
+
+- ST-Link 读寄存器：`I2C1_CR2 = 0x24`（FREQ=36 → PCLK1 36 MHz）、`I2C1_CCR = 0x801E`
+  （F/S=1，CCR=30 → 36 MHz/(30×3) = 400 kHz）、`I2C1_TRISE = 0x0B`（快模式 300 ns 上升沿）、
+  `GPIOB_CRL` 的 PB6/PB7 段 = `0xF`（复用开漏 50 MHz）。
+- `I2C1_SR1 = 0`、`I2C1_SR2 = 0`：没有 AF（从机无应答）、没有 BERR/ARLO、BUSY 已释放 → 屏在正常应答。
+
+**软件 I²C vs 硬件 I²C**：软件方案不占外设、引脚随便挑，但每个字节都要 CPU 逐位翻转并等时序，
+CPU 全程占用；硬件方案由外设自己产生时钟和数据，CPU 只调用一次 API 等它完成，代价是占用 I2C1
+和固定的 PB6/PB7。屏这类"要搬很多字节、但时序固定"的外设，硬件 I²C 更合适。
 
 ## 九、思考题
 
@@ -214,8 +239,8 @@ while (1) {
 
 - 培训资料：《电控组第三次培训学习与操作指南》《电控组第三次招新培训作业》
 - 视频：Keysking《STM32 入门》第 4~13 集；江协科技 STM32 教程 [3-3][3-4][4-1][4-2][5-1][8-1][8-2][9-1]~[9-5][10-1][10-4][10-5]
-- OLED 驱动：电控 QQ 群提供的软件 I²C SSD1306 驱动（`OLED.c` / `OLED.h` / `OLED_Font.h`，
-  PB0=SDA、PB1=SCL，源自江协科技配套驱动），字模表为 8×16 ASCII
+- OLED 驱动：电控 QQ 群提供的 SSD1306 驱动（`OLED.c` / `OLED.h` / `OLED_Font.h`，源自江协科技配套驱动，
+  原版本是软件 I²C、PB0=SDA/PB1=SCL；本工程把传输层改成硬件 I2C1、PB6/PB7），字模表为 8×16 ASCII
 - HAL 库：ST 官方 STM32CubeF1（`STM32F1xx_HAL_Driver`）
 - 数据手册：STM32F103C8 Datasheet、UM1850（HAL 手册）
 
@@ -228,8 +253,8 @@ diankong3/
 │  ├─ CMakeLists.txt
 │  ├─ cmake/gcc-arm-none-eabi.cmake
 │  ├─ STM32F103C8Tx_FLASH.ld
-│  ├─ Core/Inc/               main.h gpio.h usart.h stm32f1xx_it.h stm32f1xx_hal_conf.h OLED.h OLED_Font.h
-│  ├─ Core/Src/               main.c gpio.c usart.c stm32f1xx_it.c stm32f1xx_hal_msp.c system_stm32f1xx.c startup_stm32f103xb.s OLED.c
+│  ├─ Core/Inc/               main.h gpio.h usart.h i2c.h stm32f1xx_it.h stm32f1xx_hal_conf.h OLED.h OLED_Font.h
+│  ├─ Core/Src/               main.c gpio.c usart.c i2c.c stm32f1xx_it.c stm32f1xx_hal_msp.c system_stm32f1xx.c startup_stm32f103xb.s OLED.c
 │  └─ Drivers/                STM32F1xx_HAL_Driver + CMSIS
 ├─ sim/                       ← 离线仿真（PC 上验证逻辑，不用板子）
 ├─ 工具/                       build.ps1 / flash.ps1 / build_sim.ps1 / 发包工具.html / 接线总表.png

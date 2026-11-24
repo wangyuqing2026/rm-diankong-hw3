@@ -1,67 +1,37 @@
 #include "stm32f1xx_hal.h"
 #include "OLED_Font.h"
+#include "i2c.h"
 
-/*引脚配置*/
-#define OLED_W_SCL(x)		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, (GPIO_PinState)(x))
-#define OLED_W_SDA(x)		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, (GPIO_PinState)(x))
+/* SSD1306 的 7 位地址是 0x3C，HAL 要的是左移一位后的 0x78 */
+#define OLED_I2C_ADDR   (0x3C << 1)
+#define OLED_I2C_TMO    100u
 
-/*引脚初始化*/
+/**
+  * @brief  端口初始化
+  * @note   选做：这里不再是 PB0/PB1 逐位翻转，而是交给硬件 I2C1（PB6/PB7）
+  * @retval 无
+  */
 void OLED_I2C_Init(void)
 {
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-
-    GPIO_InitTypeDef GPIO_InitStructure;
-    GPIO_InitStructure.Speed=GPIO_SPEED_HIGH;
-    GPIO_InitStructure.Mode=GPIO_MODE_OUTPUT_OD;
-    GPIO_InitStructure.Pin=GPIO_PIN_0|GPIO_PIN_1;
-
-    HAL_GPIO_Init(GPIOB,&GPIO_InitStructure);
-
-    OLED_W_SCL(1);
-    OLED_W_SDA(1);
+	MX_I2C1_Init();
 }
 
 /**
-  * @brief  I2C开始
-  * @param  无
+  * @brief  一条 I2C 事务发两个字节：控制字 + 数据
+  * @param  ctrl 0x00 = 后面是命令，0x40 = 后面是显存数据
+  * @param  dat  要发的字节
   * @retval 无
   */
-void OLED_I2C_Start(void)
+static void OLED_I2C_WritePair(uint8_t ctrl, uint8_t dat)
 {
-	OLED_W_SDA(1);
-	OLED_W_SCL(1);
-	OLED_W_SDA(0);
-	OLED_W_SCL(0);
-}
+	uint8_t buf[2];
 
-/**
-  * @brief  I2C停止
-  * @param  无
-  * @retval 无
-  */
-void OLED_I2C_Stop(void)
-{
-	OLED_W_SDA(0);
-	OLED_W_SCL(1);
-	OLED_W_SDA(1);
-}
+	buf[0] = ctrl;
+	buf[1] = dat;
 
-/**
-  * @brief  I2C发送一个字节
-  * @param  Byte 要发送的一个字节
-  * @retval 无
-  */
-void OLED_I2C_SendByte(uint8_t Byte)
-{
-	uint8_t i;
-	for (i = 0; i < 8; i++)
-	{
-		OLED_W_SDA(Byte & (0x80 >> i));
-		OLED_W_SCL(1);
-		OLED_W_SCL(0);
-	}
-	OLED_W_SCL(1);	//额外的一个时钟，不处理应答信号
-	OLED_W_SCL(0);
+	/* 失败（屏没接、地址不对）时什么都不做：屏幕保持上一帧，
+	   不阻塞主循环，也不影响灯和按键 */
+	(void)HAL_I2C_Master_Transmit(&hi2c1, OLED_I2C_ADDR, buf, 2u, OLED_I2C_TMO);
 }
 
 /**
@@ -71,11 +41,7 @@ void OLED_I2C_SendByte(uint8_t Byte)
   */
 void OLED_WriteCommand(uint8_t Command)
 {
-	OLED_I2C_Start();
-	OLED_I2C_SendByte(0x78);		//从机地址
-	OLED_I2C_SendByte(0x00);		//写命令
-	OLED_I2C_SendByte(Command); 
-	OLED_I2C_Stop();
+	OLED_I2C_WritePair(0x00u, Command);
 }
 
 /**
@@ -85,11 +51,7 @@ void OLED_WriteCommand(uint8_t Command)
   */
 void OLED_WriteData(uint8_t Data)
 {
-	OLED_I2C_Start();
-	OLED_I2C_SendByte(0x78);		//从机地址
-	OLED_I2C_SendByte(0x40);		//写数据
-	OLED_I2C_SendByte(Data);
-	OLED_I2C_Stop();
+	OLED_I2C_WritePair(0x40u, Data);
 }
 
 /**

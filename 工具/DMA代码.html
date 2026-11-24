@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>选做：DMA 发送（代码与验证）</title>
+<style>
+ :root{--bg:#0f1216;--fg:#d7dde3;--dim:#7d8894;--line:#1b2028;--hot:#1d2b3a;--acc:#4ea1ff;--kw:#c792ea;--str:#a5d6a7;--num:#ffcb6b;--com:#5c6b7a}
+ *{box-sizing:border-box}
+ body{margin:0;padding:28px 32px 60px;background:var(--bg);color:var(--fg);font-family:"Cascadia Mono","Consolas","Microsoft YaHei",monospace}
+ h1{font-size:22px;margin:0 0 4px;color:#fff;font-family:"Microsoft YaHei",sans-serif}
+ .sub{color:var(--dim);font-size:13px;margin-bottom:22px;font-family:"Microsoft YaHei",sans-serif}
+ h2{font-size:15px;color:var(--acc);margin:0 0 6px;font-family:"Microsoft YaHei",sans-serif;font-weight:600}
+ section{margin-bottom:26px}
+ .file{color:var(--dim);font-size:12px;margin-bottom:8px}
+ pre{margin:0;background:#12161c;border:1px solid var(--line);border-radius:8px;padding:12px 0;overflow-x:auto;font-size:13px;line-height:1.55}
+ pre span{display:block;white-space:pre;padding:0 14px}
+ pre span.hot{background:var(--hot);box-shadow:inset 3px 0 0 var(--acc)}
+ i{color:#4a5460;font-style:normal;user-select:none;margin-right:14px;display:inline-block;width:34px;text-align:right}
+ .k{color:var(--kw)} .s{color:var(--str)} .n{color:var(--num)} .c{color:var(--com);font-style:italic}
+ .box{background:#12161c;border:1px solid var(--line);border-radius:8px;padding:14px 16px;font-family:"Microsoft YaHei",sans-serif;font-size:13px;line-height:1.9}
+ .box b{color:#fff} .ok{color:#57d38c} .kbd{color:var(--num)}
+</style></head><body>
+<h1>选做：串口反馈改用 DMA 发送</h1>
+<div class="sub">STM32F103C8T6 · USART1_TX → DMA1_Channel4 · Normal 模式 · 字节宽度</div>
+<section>
+<h2>① usart.c — DMA 句柄与时钟</h2>
+<div class="file">usart.c　第 12~21 行</div>
+<pre>
+<span><i>  12</i>UART_HandleTypeDef huart1;</span>
+<span class="hot"><i>  13</i>DMA_HandleTypeDef  hdma_usart1_tx;   <span class="c">/* DMA1_Channel4 = USART1_TX（选做） */</span></span>
+<span><i>  14</i></span>
+<span><i>  15</i>/**</span>
+<span><i>  16</i>  * @brief 打开 DMA1 时钟</span>
+<span class="hot"><i>  17</i>  * @note  必须在 MX_USART1_UART_Init() 之前调用：MspInit 里要配置 DMA 通道，</span>
+<span><i>  18</i>  *        通道寄存器没时钟就是<span class="s">&quot;写进去没反应&quot;</span>，现象是 DMA 一直不启动。</span>
+<span><i>  19</i>  */</span>
+<span><i>  20</i><span class="k">void</span> MX_DMA_Init(<span class="k">void</span>)</span>
+<span><i>  21</i>{</span>
+</pre></section>
+<section>
+<h2>② stm32f1xx_hal_msp.c — 通道参数与链接</h2>
+<div class="file">stm32f1xx_hal_msp.c　第 52~77 行</div>
+<pre>
+<span><i>  52</i></span>
+<span><i>  53</i>    /* ---- 选做：USART1_TX 走 DMA1_Channel4 ----</span>
+<span><i>  54</i>     * 搬运方向：内存 -&gt; 外设（USART1-&gt;DR）；内存地址自增、外设地址不变；</span>
+<span class="hot"><i>  55</i>     * 两边都是字节宽度；Normal 模式（一包搬完就停，不是循环缓冲）。</span>
+<span><i>  56</i>     * 链接到 huart1.hdmatx 之后，HAL_UART_Transmit_DMA() 才能找到这个通道。 */</span>
+<span><i>  57</i>    hdma_usart1_tx.Instance                 = DMA1_Channel4;</span>
+<span><i>  58</i>    hdma_usart1_tx.Init.Direction           = DMA_MEMORY_TO_PERIPH;</span>
+<span><i>  59</i>    hdma_usart1_tx.Init.PeriphInc           = DMA_PINC_DISABLE;</span>
+<span><i>  60</i>    hdma_usart1_tx.Init.MemInc              = DMA_MINC_ENABLE;</span>
+<span><i>  61</i>    hdma_usart1_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;</span>
+<span class="hot"><i>  62</i>    hdma_usart1_tx.Init.MemDataAlignment    = DMA_MDATAALIGN_BYTE;</span>
+<span><i>  63</i>    hdma_usart1_tx.Init.Mode                = DMA_NORMAL;</span>
+<span><i>  64</i>    hdma_usart1_tx.Init.Priority            = DMA_PRIORITY_LOW;</span>
+<span><i>  65</i>    <span class="k">if</span> (HAL_DMA_Init(&amp;hdma_usart1_tx) != HAL_OK)</span>
+<span class="hot"><i>  66</i>    {</span>
+<span><i>  67</i>      Error_Handler();</span>
+<span><i>  68</i>    }</span>
+<span><i>  69</i>    __HAL_LINKDMA(huart, hdmatx, hdma_usart1_tx);</span>
+<span><i>  70</i></span>
+<span><i>  71</i>    <span class="c">/* DMA 传输完成要靠中断来收尾（清标志、回调），优先级低于串口接收 */</span></span>
+<span><i>  72</i>    HAL_NVIC_SetPriority(DMA1_Channel4_IRQn, <span class="n">2</span>, <span class="n">0</span>);</span>
+<span><i>  73</i>    HAL_NVIC_EnableIRQ(DMA1_Channel4_IRQn);</span>
+<span><i>  74</i>  }</span>
+<span><i>  75</i>}</span>
+<span><i>  76</i></span>
+<span><i>  77</i><span class="k">void</span> HAL_UART_MspDeInit(UART_HandleTypeDef *huart)</span>
+</pre></section>
+<section>
+<h2>③ stm32f1xx_it.c — 传输完成中断</h2>
+<div class="file">stm32f1xx_it.c　第 92~100 行</div>
+<pre>
+<span><i>  92</i>/**</span>
+<span><i>  93</i>  * @brief 选做：DMA1_Channel4 中断（USART1_TX 搬完一包时进来）</span>
+<span><i>  94</i>  * @note  HAL_DMA_IRQHandler 会清掉传输完成标志，并回调 HAL_UART_TxCpltCallback，</span>
+<span><i>  95</i>  *        我们的 s_tx_busy 就是在那里面清掉的——少了这个入口，标志永远不清，</span>
+<span><i>  96</i>  *        现象是<span class="s">&quot;第一包发出去了，之后再也不发&quot;</span>。</span>
+<span><i>  97</i>  */</span>
+<span><i>  98</i><span class="k">void</span> DMA1_Channel4_IRQHandler(<span class="k">void</span>)</span>
+<span><i>  99</i>{</span>
+<span><i> 100</i>  HAL_DMA_IRQHandler(&amp;hdma_usart1_tx);</span>
+</pre></section>
+<section>
+<h2>④ main.c — 初始化顺序</h2>
+<div class="file">main.c　第 186~193 行</div>
+<pre>
+<span><i> 186</i>  SystemClock_Config();</span>
+<span><i> 187</i></span>
+<span><i> 188</i>  <span class="c">/* 外设初始化 -----------------------------------------------------------*/</span></span>
+<span class="hot"><i> 189</i>  MX_GPIO_Init();</span>
+<span><i> 190</i>  MX_DMA_Init();                  <span class="c">/* 选做：DMA1 时钟，必须在串口初始化之前 */</span></span>
+<span><i> 191</i>  MX_USART1_UART_Init();</span>
+<span><i> 192</i></span>
+<span><i> 193</i>  <span class="c">/* USER CODE BEGIN 2 */</span></span>
+</pre></section>
+<section>
+<h2>⑤ main.c — 改用 DMA 发送</h2>
+<div class="file">main.c　第 453~488 行</div>
+<pre>
+<span><i> 453</i>  *        USART1-&gt;DR，搬完才用一次中断通知 CPU。</span>
+<span><i> 454</i>  */</span>
+<span><i> 455</i><span class="k">static</span> <span class="k">void</span> Feedback_Send(<span class="k">void</span>)</span>
+<span><i> 456</i>{</span>
+<span><i> 457</i>  <span class="k">int</span> n;</span>
+<span><i> 458</i></span>
+<span><i> 459</i>  <span class="k">if</span> (s_tx_busy)</span>
+<span><i> 460</i>  {</span>
+<span><i> 461</i>    s_tx_pending = <span class="n">1u</span>;</span>
+<span><i> 462</i>    <span class="k">return</span>;</span>
+<span><i> 463</i>  }</span>
+<span><i> 464</i></span>
+<span><i> 465</i>  n = snprintf(s_fb_buf, FB_BUF_SIZE, <span class="s">&quot;STATE=%s,DIR=%s,STEP=%u,LED=%u\r\n&quot;</span>,</span>
+<span><i> 466</i>               (s_led.running != <span class="n">0u</span>) ? <span class="s">&quot;RUN&quot;</span> : <span class="s">&quot;PAUSE&quot;</span>,</span>
+<span><i> 467</i>               (s_led.dir != <span class="n">0u</span>) ? <span class="s">&quot;REV&quot;</span> : <span class="s">&quot;FWD&quot;</span>,</span>
+<span><i> 468</i>               (unsigned <span class="k">int</span>)s_led.step_ms,</span>
+<span><i> 469</i>               (unsigned <span class="k">int</span>)(s_led.led + <span class="n">1u</span>));</span>
+<span><i> 470</i>  <span class="k">if</span> (n &lt;= <span class="n">0</span>)</span>
+<span><i> 471</i>  {</span>
+<span><i> 472</i>    <span class="k">return</span>;</span>
+<span><i> 473</i>  }</span>
+<span><i> 474</i>  <span class="k">if</span> (n &gt;= (<span class="k">int</span>)FB_BUF_SIZE)</span>
+<span><i> 475</i>  {</span>
+<span><i> 476</i>    n = (<span class="k">int</span>)FB_BUF_SIZE - <span class="n">1</span>;</span>
+<span><i> 477</i>  }</span>
+<span class="hot"><i> 478</i></span>
+<span><i> 479</i>  s_tx_busy = <span class="n">1u</span>;</span>
+<span><i> 480</i>  <span class="k">if</span> (HAL_UART_Transmit_DMA(&amp;huart1, (<span class="k">uint8_t</span> *)s_fb_buf, (<span class="k">uint16_t</span>)n) != HAL_OK)</span>
+<span><i> 481</i>  {</span>
+<span><i> 482</i>    s_tx_busy = <span class="n">0u</span>;</span>
+<span><i> 483</i>    s_tx_pending = <span class="n">1u</span>;</span>
+<span><i> 484</i>  }</span>
+<span><i> 485</i>}</span>
+<span><i> 486</i></span>
+<span><i> 487</i><span class="c">/* ======================== 5. OLED 显示 =================================== */</span></span>
+<span><i> 488</i></span>
+</pre></section>
+<section><h2>⑥ 上板验证结果</h2>
+<div class="box">
+<b>串口闭环</b>　发 <span class="kbd">AA 01 01 E8 03 97</span> → 回 <span class="ok">STATE=RUN,DIR=REV,STEP=1000,LED=1</span><br>
+　　　　　　发 <span class="kbd">AA 00 00 2C 01 D7</span> → 回 <span class="ok">STATE=PAUSE,DIR=FWD,STEP=300,LED=1</span><br>
+　　　　　　连发 5 包 → 收到 5 行，顺序正确<br><br>
+<b>DMA 寄存器（ST-Link 读出，证明是 DMA 在搬字节）</b><br>
+　　CPAR　= <span class="kbd">0x40013804</span>　→　USART1-&gt;DR<br>
+　　CMAR　= <span class="kbd">0x20000114</span>　→　发送缓冲区 s_fb_buf<br>
+　　CNDTR = <span class="kbd">0</span>　　　　　→　一包已搬完<br><br>
+<b>离线仿真</b>　<span class="ok">35 passed, 0 failed</span>
+</div></section>
+</body></html>

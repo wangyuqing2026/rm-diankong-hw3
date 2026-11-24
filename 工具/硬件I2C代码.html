@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>选做：硬件 I²C 驱动 OLED（代码与验证）</title>
+<style>
+ :root{--bg:#0f1216;--fg:#d7dde3;--dim:#7d8894;--line:#1b2028;--hot:#1d2b3a;--acc:#4ea1ff;--kw:#c792ea;--num:#ffcb6b;--com:#5c6b7a}
+ *{box-sizing:border-box}
+ body{margin:0;padding:28px 32px 60px;background:var(--bg);color:var(--fg);font-family:"Cascadia Mono","Consolas","Microsoft YaHei",monospace}
+ h1{font-size:22px;margin:0 0 4px;color:#fff;font-family:"Microsoft YaHei",sans-serif}
+ .sub{color:var(--dim);font-size:13px;margin-bottom:22px;font-family:"Microsoft YaHei",sans-serif}
+ h2{font-size:15px;color:var(--acc);margin:0 0 6px;font-family:"Microsoft YaHei",sans-serif;font-weight:600}
+ section{margin-bottom:26px}
+ .file{color:var(--dim);font-size:12px;margin-bottom:8px}
+ pre{margin:0;background:#12161c;border:1px solid var(--line);border-radius:8px;padding:12px 0;overflow-x:auto;font-size:13px;line-height:1.55}
+ pre span{display:block;white-space:pre;padding:0 14px}
+ pre span.hot{background:var(--hot);box-shadow:inset 3px 0 0 var(--acc)}
+ i{color:#4a5460;font-style:normal;user-select:none;margin-right:14px;display:inline-block;width:34px;text-align:right}
+ .k{color:var(--kw)} .n{color:var(--num)} .c{color:var(--com);font-style:italic}
+ .box{background:#12161c;border:1px solid var(--line);border-radius:8px;padding:14px 16px;font-family:"Microsoft YaHei",sans-serif;font-size:13px;line-height:1.9}
+ .box b{color:#fff} .ok{color:#57d38c} .kbd{color:var(--num)}
+</style></head><body>
+<h1>选做：OLED 改用硬件 I²C</h1>
+<div class="sub">STM32F103C8T6 · I2C1 · PB6=SCL / PB7=SDA · 400 kHz · SSD1306 地址 0x78</div>
+<section>
+<h2>① i2c.c — 400 kHz、7 位地址</h2>
+<div class="file">i2c.c　第 18~34 行</div>
+<pre>
+<span><i>  18</i><span class="k">void</span> MX_I2C1_Init(<span class="k">void</span>)</span>
+<span><i>  19</i>{</span>
+<span><i>  20</i>  hi2c1.Instance             = I2C1;</span>
+<span><i>  21</i>  hi2c1.Init.ClockSpeed      = <span class="n">400000u</span>;</span>
+<span><i>  22</i>  hi2c1.Init.DutyCycle       = I2C_DUTYCYCLE_2;</span>
+<span class="hot"><i>  23</i>  hi2c1.Init.OwnAddress1     = <span class="n">0u</span>;</span>
+<span class="hot"><i>  24</i>  hi2c1.Init.AddressingMode  = I2C_ADDRESSINGMODE_7BIT;</span>
+<span class="hot"><i>  25</i>  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;</span>
+<span class="hot"><i>  26</i>  hi2c1.Init.OwnAddress2     = <span class="n">0u</span>;</span>
+<span class="hot"><i>  27</i>  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;</span>
+<span class="hot"><i>  28</i>  hi2c1.Init.NoStretchMode   = I2C_NOSTRETCH_DISABLE;</span>
+<span class="hot"><i>  29</i></span>
+<span><i>  30</i>  <span class="k">if</span> (HAL_I2C_Init(&amp;hi2c1) != HAL_OK)</span>
+<span><i>  31</i>  {</span>
+<span><i>  32</i>    Error_Handler();</span>
+<span><i>  33</i>  }</span>
+<span><i>  34</i>}</span>
+</pre></section>
+<section>
+<h2>② i2c.c — PB6/PB7 配置成复用开漏</h2>
+<div class="file">i2c.c　第 39~54 行</div>
+<pre>
+<span><i>  39</i><span class="k">void</span> HAL_I2C_MspInit(I2C_HandleTypeDef *hi2c)</span>
+<span><i>  40</i>{</span>
+<span><i>  41</i>  GPIO_InitTypeDef GPIO_InitStruct = {<span class="n">0</span>};</span>
+<span><i>  42</i></span>
+<span><i>  43</i>  <span class="k">if</span> (hi2c-&gt;Instance == I2C1)</span>
+<span><i>  44</i>  {</span>
+<span><i>  45</i>    __HAL_RCC_GPIOB_CLK_ENABLE();</span>
+<span><i>  46</i>    __HAL_RCC_I2C1_CLK_ENABLE();</span>
+<span><i>  47</i></span>
+<span class="hot"><i>  48</i>    <span class="c">/* PB6 = SCL，PB7 = SDA；复用开漏，I²C 只能开漏 */</span></span>
+<span class="hot"><i>  49</i>    GPIO_InitStruct.Pin   = GPIO_PIN_6 | GPIO_PIN_7;</span>
+<span><i>  50</i>    GPIO_InitStruct.Mode  = GPIO_MODE_AF_OD;</span>
+<span><i>  51</i>    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;</span>
+<span><i>  52</i>    HAL_GPIO_Init(GPIOB, &amp;GPIO_InitStruct);</span>
+<span><i>  53</i>  }</span>
+<span><i>  54</i>}</span>
+</pre></section>
+<section>
+<h2>③ OLED.c — 位翻转换成 HAL 事务（对外接口不变）</h2>
+<div class="file">OLED.c　第 13~52 行</div>
+<pre>
+<span><i>  13</i>  */</span>
+<span><i>  14</i><span class="k">void</span> OLED_I2C_Init(<span class="k">void</span>)</span>
+<span><i>  15</i>{</span>
+<span><i>  16</i>    MX_I2C1_Init();</span>
+<span><i>  17</i>}</span>
+<span><i>  18</i></span>
+<span><i>  19</i>/**</span>
+<span><i>  20</i>  * @brief  一条 I2C 事务发两个字节：控制字 + 数据</span>
+<span class="hot"><i>  21</i>  * @param  ctrl <span class="n">0x00</span> = 后面是命令，<span class="n">0x40</span> = 后面是显存数据</span>
+<span><i>  22</i>  * @param  dat  要发的字节</span>
+<span><i>  23</i>  * @retval 无</span>
+<span><i>  24</i>  */</span>
+<span><i>  25</i><span class="k">static</span> <span class="k">void</span> OLED_I2C_WritePair(<span class="k">uint8_t</span> ctrl, <span class="k">uint8_t</span> dat)</span>
+<span><i>  26</i>{</span>
+<span><i>  27</i>    <span class="k">uint8_t</span> buf[<span class="n">2</span>];</span>
+<span class="hot"><i>  28</i></span>
+<span><i>  29</i>    buf[<span class="n">0</span>] = ctrl;</span>
+<span><i>  30</i>    buf[<span class="n">1</span>] = dat;</span>
+<span><i>  31</i></span>
+<span><i>  32</i>    /* 失败（屏没接、地址不对）时什么都不做：屏幕保持上一帧，</span>
+<span><i>  33</i>       不阻塞主循环，也不影响灯和按键 */</span>
+<span><i>  34</i>    (<span class="k">void</span>)HAL_I2C_Master_Transmit(&amp;hi2c1, OLED_I2C_ADDR, buf, <span class="n">2u</span>, OLED_I2C_TMO);</span>
+<span><i>  35</i>}</span>
+<span class="hot"><i>  36</i></span>
+<span><i>  37</i>/**</span>
+<span><i>  38</i>  * @brief  OLED写命令</span>
+<span><i>  39</i>  * @param  Command 要写入的命令</span>
+<span><i>  40</i>  * @retval 无</span>
+<span><i>  41</i>  */</span>
+<span><i>  42</i><span class="k">void</span> OLED_WriteCommand(<span class="k">uint8_t</span> Command)</span>
+<span><i>  43</i>{</span>
+<span><i>  44</i>    OLED_I2C_WritePair(0x00u, Command);</span>
+<span><i>  45</i>}</span>
+<span><i>  46</i></span>
+<span><i>  47</i>/**</span>
+<span><i>  48</i>  * @brief  OLED写数据</span>
+<span><i>  49</i>  * @param  Data 要写入的数据</span>
+<span><i>  50</i>  * @retval 无</span>
+<span><i>  51</i>  */</span>
+<span><i>  52</i><span class="k">void</span> OLED_WriteData(<span class="k">uint8_t</span> Data)</span>
+</pre></section>
+<section><h2>④ 上板验证（ST-Link 读寄存器）</h2>
+<div class="box">
+<b>速度算对了</b>　CR2 = <span class="kbd">0x24</span>（FREQ=36 → PCLK1 36 MHz）<br>
+　　　　　　　CCR = <span class="kbd">0x801E</span>（F/S=1，CCR=30 → 36 MHz / (30×3) = <b>400 kHz</b>）<br>
+　　　　　　　TRISE = <span class="kbd">0x0B</span>（快模式 300 ns 上升沿）<br><br>
+<b>引脚配对了</b>　GPIOB_CRL = <span class="kbd">0xFF484444</span>　→　PB7/PB6 = <span class="kbd">0xF</span>（复用开漏 50 MHz）<br><br>
+<b>屏在应答</b>　SR1 = <span class="kbd">0</span>、SR2 = <span class="kbd">0</span>　→　无 AF（从机无应答）、无 BERR/ARLO、BUSY 已释放<br><br>
+<b>功能回归</b>　<span class="ok">四行照常显示，灯/按键/串口不受影响</span>；离线仿真 <span class="ok">35 passed, 0 failed</span>
+</div></section>
+</body></html>

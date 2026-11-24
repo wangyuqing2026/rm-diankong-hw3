@@ -191,7 +191,7 @@ int main(void)
   MX_USART1_UART_Init();
 
   /* USER CODE BEGIN 2 */
-  OLED_Init();                    /* 软件 I²C 驱动内部自己配置 PB0/PB1 */
+  OLED_Init();                    /* 选做：驱动内部改用硬件 I2C1（PB6=SCL、PB7=SDA） */
   Led_Apply();                    /* 先按初始状态点亮 LED1 */
   Oled_Refresh();                 /* 首屏 */
   s_led.tick = HAL_GetTick();
