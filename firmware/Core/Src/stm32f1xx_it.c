@@ -9,6 +9,7 @@
 
 #include "main.h"
 #include "stm32f1xx_it.h"
+#include "usart.h"          /* huart1 / hdma_usart1_tx 的声明在这里 */
 
 extern UART_HandleTypeDef huart1;
 
@@ -86,4 +87,15 @@ void EXTI15_10_IRQHandler(void)
 {
   HAL_GPIO_EXTI_IRQHandler(KEY1_Pin);
   HAL_GPIO_EXTI_IRQHandler(KEY2_Pin);
+}
+
+/**
+  * @brief 选做：DMA1_Channel4 中断（USART1_TX 搬完一包时进来）
+  * @note  HAL_DMA_IRQHandler 会清掉传输完成标志，并回调 HAL_UART_TxCpltCallback，
+  *        我们的 s_tx_busy 就是在那里面清掉的——少了这个入口，标志永远不清，
+  *        现象是"第一包发出去了，之后再也不发"。
+  */
+void DMA1_Channel4_IRQHandler(void)
+{
+  HAL_DMA_IRQHandler(&hdma_usart1_tx);
 }

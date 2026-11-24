@@ -187,6 +187,7 @@ int main(void)
 
   /* 外设初始化 -----------------------------------------------------------*/
   MX_GPIO_Init();
+  MX_DMA_Init();                  /* 选做：DMA1 时钟，必须在串口初始化之前 */
   MX_USART1_UART_Init();
 
   /* USER CODE BEGIN 2 */
@@ -442,11 +443,14 @@ static void App_StateChanged(void)
   Feedback_Send();
 }
 
-/* ======================== 4. 串口反馈（中断发送）========================= */
+/* ======================== 4. 串口反馈（DMA 发送，选做）================== */
 
 /**
-  * @brief 把当前状态格式化成一行文本，用 HAL_UART_Transmit_IT 发出去
-  * @note  上一包没发完就只记一个"待发"标记，等发完再发，避免改写正在发送的缓冲区
+  * @brief 把当前状态格式化成一行文本，用 HAL_UART_Transmit_DMA 发出去
+  * @note  上一包没发完就只记一个"待发"标记，等发完再发，避免改写正在发送的缓冲区。
+  *        和中断发送的区别：中断方式每个字节进一次 CPU，一包 34 字节就打断 34 次；
+  *        DMA 方式 CPU 只负责启动，之后由 DMA1_Channel4 把内存里的字节一个个搬到
+  *        USART1->DR，搬完才用一次中断通知 CPU。
   */
 static void Feedback_Send(void)
 {
@@ -473,7 +477,7 @@ static void Feedback_Send(void)
   }
 
   s_tx_busy = 1u;
-  if (HAL_UART_Transmit_IT(&huart1, (uint8_t *)s_fb_buf, (uint16_t)n) != HAL_OK)
+  if (HAL_UART_Transmit_DMA(&huart1, (uint8_t *)s_fb_buf, (uint16_t)n) != HAL_OK)
   {
     s_tx_busy = 0u;
     s_tx_pending = 1u;
@@ -575,6 +579,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 /**
   * @brief 串口发送完成：清忙标志，允许下一条反馈
+  * @note  DMA 发送时这个回调同样会来：DMA 搬完最后一字节 -> DMA1_Channel4 中断
+  *        -> HAL_DMA_IRQHandler -> UART_DMATransmitCplt -> 这里。
+  *        换句话说"换 DMA"不用改回调，这正是 HAL 抽象的价值。
   */
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {

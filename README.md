@@ -12,8 +12,8 @@
 | 按键 | 一个切方向、一个切暂停/继续，需消抖 | 已完成，PA11 / PA12 外部中断 + 20 ms 消抖 |
 | 串口数据包 | `AA RUN DIR STEP_L STEP_H CHECK`，6 字节 | 已完成，中断收字节 + 主循环拆包校验 |
 | OLED | 软件 I²C，显示状态/方向/间隔/LED 编号 | 已完成，四行实时刷新 |
-| 串口反馈 | 校验通过后回传状态，按键变化也回传 | 已完成，`HAL_UART_Transmit_IT()` |
-| 选做 | DMA 发送 / 硬件 I²C | **（做了就写：已完成 DMA 发送 / 未做）** |
+| 串口反馈 | 校验通过后回传状态，按键变化也回传 | 已完成，`HAL_UART_Transmit_DMA()`（选做） |
+| 选做 | DMA 发送 / 硬件 I²C | **已完成 DMA 发送**（DMA1_Channel4 → USART1_TX）；硬件 I²C 未做 |
 
 ## 二、硬件与接线
 
@@ -139,17 +139,47 @@ main()
 
 > 表中 1~12 的逻辑行为已用 `sim/` 下的离线仿真跑过 35 项断言（全部通过），
 > 上板后按同一张表复测，把"实际"列改成自己看到的现象。
+> 重新跑仿真：`powershell -ExecutionPolicy Bypass -File 工具\build_sim.ps1`
+> （改完 `LED_NUM` 后要跟着改测试里的假设：一轮的步数是 `LED_NUM`，不是固定 4。）
 
 ## 八、选做
 
-**（按实际情况保留一段）**
+### 8.1 已完成：DMA 发送
 
-- 未做选做：基础要求已全部完成。
-- 做了 DMA 发送：反馈改用 `HAL_UART_Transmit_DMA()`，DMA1_Channel4（USART1_TX），
-  Normal 模式、Memory→Peripheral、Byte；启动后关闭半传输中断 `__HAL_DMA_DISABLE_IT(huart1.hdmatx, DMA_IT_HT)`；
-  完成回调仍是 `HAL_UART_TxCpltCallback()`。工程在 `firmware_dma/`。
-- 做了硬件 I²C：OLED 改用 I2C1（PB6/PB7，100 kHz），`OLED_WriteCommand/WriteData` 换成
-  `HAL_I2C_Master_Transmit(&hi2c1, 0x78, buf, 2, 100)`。工程在 `firmware_hw_i2c/`。
+反馈从 `HAL_UART_Transmit_IT()` 换成 `HAL_UART_Transmit_DMA()`，数据由 DMA1_Channel4 搬进
+`USART1->DR`，CPU 只在启动和搬完时各被打断一次。
+
+改动共四处：
+
+| 文件 | 改了什么 |
+| --- | --- |
+| `Core/Src/usart.c` | 新增 `DMA_HandleTypeDef hdma_usart1_tx;` 和 `MX_DMA_Init()`（打开 DMA1 时钟） |
+| `Core/Src/stm32f1xx_hal_msp.c` | `HAL_UART_MspInit()` 里初始化通道：Memory→Peripheral、MINC、Byte/Byte、Normal、低优先级，并 `__HAL_LINKDMA(huart, hdmatx, hdma_usart1_tx)` |
+| `Core/Src/stm32f1xx_it.c` | 新增 `DMA1_Channel4_IRQHandler()` → `HAL_DMA_IRQHandler(&hdma_usart1_tx)` |
+| `Core/Src/main.c` | `MX_DMA_Init()` 放在串口初始化之前；发送改 `HAL_UART_Transmit_DMA()` |
+
+**为什么 Normal 不是 Circular**：一包反馈是一次性任务，发完就该停；Circular 会自己从头再搬一遍，
+把旧数据重复发出去。
+
+**为什么必须开 DMA 中断**：搬完的收尾（清标志、调 `HAL_UART_TxCpltCallback()`）在中断里做。
+少了这个入口，`s_tx_busy` 永远不清零 → 现象是"第一包发出去了，之后再也不发"。
+
+**验证方式**（不用示波器）：
+
+- 串口收包 → 五连发 5 个不同状态的包，收到 5 行且顺序正确（忙时排队逻辑在 DMA 下同样成立）。
+- 用 ST-Link 读 DMA1_Channel4 的寄存器：`CPAR=0x40013804`（= USART1->DR）、`CMAR=0x20000114`
+  （= `s_fb_buf` 的地址）、`CNDTR=0`（已搬完）——说明字节确实是 DMA 搬的，不是中断搬的。
+
+**中断发送 vs DMA 发送**：一包 34 字节，中断方式 CPU 要进 34 次中断；DMA 方式 CPU 只进 1 次。
+波特率越高、包越长，差距越明显。
+
+### 8.2 未做：硬件 I²C
+
+留档：OLED 改用 I2C1（PB6/PB7，**400 kHz**），`OLED_WriteCommand/WriteData` 换成
+`HAL_I2C_Master_Transmit(&hi2c1, 0x78, buf, 2, 100)`。没做的原因是时间放在基础稳定性上
+（串口溢出自恢复、按键接触、面包板同排短路这三个坑）。
+
+> 注意 100 kHz 不够：整屏 1024 字节 ≈ 92 ms 阻塞，按键会明显变迟钝；400 kHz 才能压到约 23 ms。
 
 ## 九、思考题
 
@@ -202,6 +232,6 @@ diankong3/
 │  ├─ Core/Src/               main.c gpio.c usart.c stm32f1xx_it.c stm32f1xx_hal_msp.c system_stm32f1xx.c startup_stm32f103xb.s OLED.c
 │  └─ Drivers/                STM32F1xx_HAL_Driver + CMSIS
 ├─ sim/                       ← 离线仿真（PC 上验证逻辑，不用板子）
-├─ 工具/                       build.ps1 / flash.ps1 / 发包工具.html
+├─ 工具/                       build.ps1 / flash.ps1 / build_sim.ps1 / 发包工具.html / 接线总表.png
 └─ 电控组第三次作业实施手册.docx
 ```

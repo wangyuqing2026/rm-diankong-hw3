@@ -11,7 +11,20 @@ typedef enum { GPIO_PIN_RESET = 0, GPIO_PIN_SET } GPIO_PinState;
 
 typedef struct { int dummy; } GPIO_TypeDef;
 typedef struct { int dummy; } USART_TypeDef;
-typedef struct { USART_TypeDef *Instance; } UART_HandleTypeDef;
+typedef struct { USART_TypeDef *Instance; uint32_t ErrorCode; } UART_HandleTypeDef;
+typedef struct { int dummy; } DMA_HandleTypeDef;   /* 选做：仿真里只要有个类型就行 */
+
+/* 串口错误码（仿真里只用得上这几个） */
+#define HAL_UART_ERROR_NONE 0u
+#define HAL_UART_ERROR_PE   1u
+#define HAL_UART_ERROR_NE   2u
+#define HAL_UART_ERROR_FE   4u
+#define HAL_UART_ERROR_ORE  8u
+
+/* 真实 HAL 里这几个宏要去读 SR/DR 清标志；仿真没有寄存器，空操作即可 */
+#define __HAL_UART_CLEAR_OREFLAG(h) ((void)(h))
+#define __HAL_UART_CLEAR_FEFLAG(h)  ((void)(h))
+#define __HAL_UART_CLEAR_NEFLAG(h)  ((void)(h))
 
 #define GPIOA ((GPIO_TypeDef *)0x40010800u)
 #define GPIOB ((GPIO_TypeDef *)0x40010C00u)
@@ -53,6 +66,7 @@ void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint16_t pin, GPIO_PinState state);
 GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint16_t pin);
 HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *h, uint8_t *p, uint16_t len);
 HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *h, uint8_t *p, uint16_t len);
+HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef *h, uint8_t *p, uint16_t len);
 HAL_StatusTypeDef HAL_RCC_OscConfig(RCC_OscInitTypeDef *s);
 HAL_StatusTypeDef HAL_RCC_ClockConfig(RCC_ClkInitTypeDef *s, uint32_t latency);
 

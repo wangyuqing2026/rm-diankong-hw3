@@ -65,6 +65,13 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *h, uint8_t *p, uint16
     return HAL_OK;
 }
 
+HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef *h, uint8_t *p, uint16_t len)
+{
+    /* 仿真里 DMA 与中断的行为等价：都是"异步把这段数据发出去"，
+       所以直接复用上面的桩；区别只在实际硬件上由谁搬字节。 */
+    return HAL_UART_Transmit_IT(h, p, len);
+}
+
 HAL_StatusTypeDef HAL_RCC_OscConfig(RCC_OscInitTypeDef *s) { (void)s; return HAL_OK; }
 HAL_StatusTypeDef HAL_RCC_ClockConfig(RCC_ClkInitTypeDef *s, uint32_t l) { (void)s; (void)l; return HAL_OK; }
 
@@ -85,7 +92,9 @@ void OLED_ShowString(uint8_t Line, uint8_t Column, char *String)
 
 /* 这两个原本由 gpio.c / usart.c 提供 */
 UART_HandleTypeDef huart1;
+DMA_HandleTypeDef  hdma_usart1_tx;      /* 选做：usart.h 里是 extern，这里给定义 */
 void MX_GPIO_Init(void) {}
+void MX_DMA_Init(void) {}               /* 仿真里没有 DMA1 时钟可开 */
 void MX_USART1_UART_Init(void) { huart1.Instance = USART1; }
 
 /* ---------------- 仿真辅助 ---------------- */
@@ -175,8 +184,8 @@ int main(void)
     CHECK(g_led[0] == 1, "299ms 还没到点，仍是 LED1");
     advance(1u);
     CHECK(g_led[1] == 1 && g_led[0] == 0, "300ms 切到 LED2");
-    advance(900u);
-    CHECK(g_led[0] == 1, "四颗一轮后回到 LED1");
+    advance(300u * (LED_NUM - 1u));
+    CHECK(g_led[0] == 1, "跑完一整轮后回到 LED1");
     CHECK(strcmp(g_oled[3], "LED: 1          ") == 0, "OLED 的 LED 编号跟着变");
 
     printf("\n== 3. 作业给出的 4 个示例数据包 ==\n");
